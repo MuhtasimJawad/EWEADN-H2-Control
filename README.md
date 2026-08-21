@@ -31,6 +31,7 @@ Two things this app does that the official web driver doesn't:
 - Fullscreen support (`F11` to toggle, `Esc` to exit)
 - Toast notifications when a setting is applied
 - Ships as a single self-contained AppImage — no system Python packages required
+- Headless CLI tool included: `h2_battery.py` — battery, DPI, and polling rate control from the terminal, plus a `--daemon` mode for piping battery % straight into Waybar, Quickshell, etc.
 
 ## Screenshots
 
