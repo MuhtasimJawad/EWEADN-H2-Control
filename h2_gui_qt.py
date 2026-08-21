@@ -37,8 +37,23 @@ except ImportError:
 # from).
 # ---------------------------------------------------------------------------
 
-VENDOR_ID = 0x089D
+VENDOR_ID = 0x089D   # wireless (2.4G dongle) mode
 PRODUCT_ID = 0x062F
+
+# The mouse presents a DIFFERENT USB identity while connected via cable
+# (also the mode it's in while charging) — the dongle's vendor-command
+# channel appears to stop responding once wired charging is active,
+# even though the dongle's HID interfaces are still enumerated.
+WIRED_VENDOR_ID = 0x088D
+WIRED_PRODUCT_ID = 0x062E
+
+# Tried in order — wired first, since that's the identity active while
+# charging. Falls through to the wireless dongle identity otherwise.
+KNOWN_DEVICE_IDS = [
+    (WIRED_VENDOR_ID, WIRED_PRODUCT_ID),
+    (VENDOR_ID, PRODUCT_ID),
+]
+
 READ_TIMEOUT_MS = 1000
 REPORT_RATE_TO_CODE = {125: 8, 250: 4, 500: 2, 1000: 1}
 CODE_TO_REPORT_RATE = {v: k for k, v in REPORT_RATE_TO_CODE.items()}
@@ -47,19 +62,31 @@ ASYNC_STATUS_MARKERS = (209, 210)  # unsolicited status pushes, not command repl
 
 
 def find_interface_path():
-    candidates = hid.enumerate(VENDOR_ID, PRODUCT_ID)
-    if not candidates:
-        return None
-    for c in candidates:
-        if c.get("interface_number") == 2:
-            return c["path"]
-    return candidates[-1]["path"]
+    """
+    Tries each known device identity in order (wired first, since
+    that's the one active while charging). NOTE: the wired identity's
+    interface layout (which interface number is the vendor-control
+    channel) hasn't been independently confirmed via lsusb -v — if
+    reads still fail while wired, that's the next thing to check.
+    """
+    for vendor_id, product_id in KNOWN_DEVICE_IDS:
+        candidates = hid.enumerate(vendor_id, product_id)
+        if not candidates:
+            continue
+        for c in candidates:
+            if c.get("interface_number") == 2:
+                return c["path"]
+        return candidates[-1]["path"]
+    return None
 
 
 def open_device():
     path = find_interface_path()
     if path is None:
-        raise RuntimeError("EWEADN H2 not found — is it connected (2.4G dongle or BT)?")
+        raise RuntimeError(
+            "EWEADN H2 not found (checked both wireless-dongle and wired-charging "
+            "USB identities) — is it connected (2.4G dongle, wired cable, or BT)?"
+        )
     dev = hid.device()
     dev.open_path(path)
     return dev

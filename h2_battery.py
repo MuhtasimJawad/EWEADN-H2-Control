@@ -36,8 +36,23 @@ except ImportError:
     print("Missing dependency. Install with: pip install hidapi --break-system-packages", file=sys.stderr)
     sys.exit(1)
 
-VENDOR_ID = 0x089D   # 2205
+VENDOR_ID = 0x089D   # 2205 — wireless (2.4G dongle) mode
 PRODUCT_ID = 0x062F  # 1583
+
+# The mouse presents a DIFFERENT USB identity while connected via cable
+# (which is also the mode it's in while charging) — the dongle's
+# vendor-command channel appears to stop responding once wired charging
+# is active, even though the dongle's HID interfaces are still enumerated.
+WIRED_VENDOR_ID = 0x088D
+WIRED_PRODUCT_ID = 0x062E
+
+# Tried in order — wired first, since that's the identity active while
+# charging (the main scenario this was added for). Falls through to the
+# wireless dongle identity if the wired one isn't present.
+KNOWN_DEVICE_IDS = [
+    (WIRED_VENDOR_ID, WIRED_PRODUCT_ID),
+    (VENDOR_ID, PRODUCT_ID),
+]
 
 READ_TIMEOUT_MS = 1000
 
@@ -61,18 +76,30 @@ def find_interface_path():
     """
     The H2 exposes 3 HID interfaces (mouse, keyboard, vendor-control).
     The vendor/config interface is the one the web driver talks to
-    (interface number 2 in the lsusb -v output).
+    (interface number 2 in the lsusb -v output for the wireless
+    identity — NOTE: this hasn't been independently confirmed for the
+    wired identity's interface layout, since lsusb -v -d 088d:062e
+    output hasn't been captured yet. If reads still fail while wired,
+    that's the next thing to check).
+
+    Tries each known device identity in order (wired first, since
+    that's the one active while charging) and returns the first
+    matching interface found.
     """
-    candidates = hid.enumerate(VENDOR_ID, PRODUCT_ID)
-    if not candidates:
-        return None
+    for vendor_id, product_id in KNOWN_DEVICE_IDS:
+        candidates = hid.enumerate(vendor_id, product_id)
+        if not candidates:
+            continue
 
-    for c in candidates:
-        if c.get("interface_number") == 2:
-            return c["path"]
+        for c in candidates:
+            if c.get("interface_number") == 2:
+                return c["path"]
 
-    # Fallback for hidapi backends that don't report interface_number reliably.
-    return candidates[-1]["path"]
+        # Fallback for hidapi backends that don't report interface_number
+        # reliably, or if this identity's vendor interface isn't at index 2.
+        return candidates[-1]["path"]
+
+    return None
 
 
 def drain_stale_reports(dev, max_drain=20):
@@ -372,7 +399,10 @@ def to_bar_dict(info):
 def open_device():
     path = find_interface_path()
     if path is None:
-        raise RuntimeError("EWEADN H2 not found — is it connected (2.4G dongle or BT)?")
+        raise RuntimeError(
+            "EWEADN H2 not found (checked both wireless-dongle and wired-charging "
+            "USB identities) — is it connected (2.4G dongle, wired cable, or BT)?"
+        )
     dev = hid.device()
     dev.open_path(path)
     return dev

@@ -22,7 +22,7 @@ Two things this app does that the official web driver doesn't:
 
 ## Features
 
-- Live battery percentage (auto-refreshes every 60s) and charging state — **not shown anywhere in the official web driver**
+- Live battery percentage (auto-refreshes every 60s) — **battery % isn't shown anywhere in the official web driver**
 - Firmware version and device ID display
 - Polling rate control — 125 / 250 / 500 / 1000 Hz
 - All 6 DPI slots, each with a linked spin box + slider (50–32000 DPI)
@@ -39,7 +39,7 @@ Two things this app does that the official web driver doesn't:
 ## Requirements
 
 - Linux, x86_64
-- The EWEADN H2 connected via its 2.4G dongle (or Bluetooth)
+- The EWEADN H2 connected via its 2.4G dongle, wired USB cable, or Bluetooth
 - A one-time **udev rule** so the app can talk to the mouse without `sudo` (see below)
 
 ## Installation
@@ -58,20 +58,56 @@ Two things this app does that the official web driver doesn't:
 ### Required: udev rule
 
 The mouse's control interface is only accessible to `root` by default.
-This rule grants your user access without needing `sudo` every time:
+This rule grants your user access without needing `sudo` every time —
+**it covers both USB identities the mouse presents** (the wireless
+dongle mode, `089d:062f`, and the wired/charging mode, `088d:062e`),
+across the different access mechanisms different `hidapi` builds and
+Linux setups actually use in practice (plain `hidraw` permissions, the
+raw `usb` device node if your `hidapi` install uses the libusb backend,
+and systemd-logind's dynamic ACLs via `uaccess`, which many
+systemd-based distros — Arch included — rely on):
 
 ```bash
-echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="089d", ATTRS{idProduct}=="062f", MODE="0666"' | sudo tee /etc/udev/rules.d/99-eweadn-h2.rules
+echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="089d", ATTRS{idProduct}=="062f", MODE="0666"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="088d", ATTRS{idProduct}=="062e", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="089d", ATTR{idProduct}=="062f", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="088d", ATTR{idProduct}=="062e", MODE="0666"
+KERNEL=="hidraw*", ATTRS{idVendor}=="089d", ATTRS{idProduct}=="062f", MODE="0666", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="088d", ATTRS{idProduct}=="062e", MODE="0666", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/99-eweadn-h2.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-Then **unplug and replug** the mouse's dongle (or restart the mouse) so
-the new permission actually applies to its device node.
+Verify it worked — this checks the actual node(s) tied to the mouse
+(matching by vendor/product ID) rather than just listing all hidraw
+devices, since `ls -l /dev/hidraw*` alone won't show which one is
+actually the mouse:
 
-Verify it worked:
+```fish
+for dev in /sys/class/hidraw/hidraw*
+    set uevent "$dev/device/uevent"
+    if grep -qiE "089d|088d" "$uevent" 2>/dev/null
+        set node "/dev/"(basename "$dev")
+        echo "$node:"
+        grep -i "hid_id\|hid_name" "$uevent"
+        ls -l "$node"
+        echo
+    end
+end
+```
+
+(bash equivalent, if you're not using fish:)
 
 ```bash
-ls -l /dev/hidraw* | grep -i 089d
+for dev in /sys/class/hidraw/hidraw*; do
+  uevent="$dev/device/uevent"
+  if grep -qiE "089d|088d" "$uevent" 2>/dev/null; then
+    node="/dev/$(basename "$dev")"
+    echo "$node:"
+    grep -i "hid_id\|hid_name" "$uevent"
+    ls -l "$node"
+    echo
+  fi
+done
 ```
 
 You should see a device node owned by your user or with world read/write
@@ -120,10 +156,30 @@ it's confirmed written.
 
 ## Troubleshooting
 
+**"open failed" even though the udev rule is applied and hidraw permissions look correct (`crw-rw-rw-`)**
+Your `hidapi` install may be using the `libusb` backend rather than the
+kernel's `hidraw` interface — check with:
+```bash
+ldd $(python3 -c "import hid, os; print(os.path.dirname(hid.__file__))")/hid*.so 2>/dev/null | grep -i usb
+```
+If that shows `libusb`, the relevant permission is on the raw USB
+device node under `/dev/bus/usb/`, not the hidraw node — the udev rule
+above already includes a `SUBSYSTEM=="usb"` line to cover this, along
+with a `KERNEL=="hidraw*", ..., TAG+="uaccess"` line for systemd-based
+distros that grant device access via logind's dynamic ACLs instead of
+static file permissions. If you're still stuck after applying the full
+rule and replugging, it's worth trying each mechanism in isolation to
+see which one your system actually needs.
+
 **"EWEADN H2 not found"**
-Make sure the dongle is plugged in (or Bluetooth is connected) and
-`lsusb` shows `089d:062f`. If it's listed but the app still can't find
-it, the udev rule likely isn't applied yet — see above.
+Make sure the mouse is connected — via the 2.4G dongle, wired USB
+cable, or Bluetooth — and `lsusb` shows one of its two possible IDs:
+`089d:062f` (wireless dongle mode) or `088d:062e` (wired/charging
+mode). If both the dongle and a USB cable are connected at the same
+time, `lsusb` will show both IDs at once — the app always prefers the
+wired identity (`088d:062e`) for communication whenever it's present.
+If the expected ID is listed but the app still can't find it, the
+udev rule likely isn't applied yet — see above.
 
 **Everything times out / empty responses**
 The 2.4G dongle occasionally drops a reply. The app already retries
@@ -176,7 +232,7 @@ build via pip.
 | File | Purpose |
 |---|---|
 | `h2_gui_qt.py` | The GUI application (PySide6/Qt) |
-| `h2_battery.py` | Command-line version — battery reading, `--get-config`, `--set-rate`, `--set-dpi`, `--set-active-dpi`, and a `--daemon` mode for status-bar integrations (Waybar, caelestia, etc.) |
+| `h2_battery.py` | Command-line version — battery reading, `--get-config`, `--set-rate`, `--set-dpi`, `--set-active-dpi`, and a `--daemon` mode for status-bar integrations (Waybar, Quickshell, etc.) |
 | `build_appimage_qt.sh` | Builds the AppImage from `h2_gui_qt.py` |
 | `screenshots/` | Images used in this README |
 
