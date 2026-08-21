@@ -1,0 +1,18 @@
+# Build artifacts from build_appimage_qt.sh
+.build-venv/
+build/
+dist/
+*.spec
+AppDir/
+appimagetool-x86_64.AppImage
+*.AppImage
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor/OS cruft
+.vscode/
+.idea/
+*.swp
+.DS_Store
