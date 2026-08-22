@@ -40,7 +40,7 @@ Two things this app does that the official web driver doesn't:
 ## Requirements
 
 - Linux, x86_64
-- The EWEADN H2 connected via its 2.4G dongle, wired USB cable, or Bluetooth
+- The EWEADN H2 connected via its 2.4G dongle or wired USB cable
 - A one-time **udev rule** so the app can talk to the mouse without `sudo` (see below)
 
 ## Installation
@@ -173,8 +173,8 @@ rule and replugging, it's worth trying each mechanism in isolation to
 see which one your system actually needs.
 
 **"EWEADN H2 not found"**
-Make sure the mouse is connected — via the 2.4G dongle, wired USB
-cable, or Bluetooth — and `lsusb` shows one of its two possible IDs:
+Make sure the mouse is connected — via the 2.4G dongl or wired USB
+cable — and `lsusb` shows one of its two possible IDs:
 `089d:062f` (wireless dongle mode) or `088d:062e` (wired/charging
 mode). If both the dongle and a USB cable are connected at the same
 time, `lsusb` will show both IDs at once — the app always prefers the
