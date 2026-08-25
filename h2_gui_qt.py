@@ -229,10 +229,24 @@ def get_dpi_config(dev, ic_type=17):
     arr = [0x00, 19] + [0x00] * 31
     slot_offsets = [5, 9, 13, 17, 21, 25]
 
-    def looks_empty(r):
+    def looks_wrong(r):
+        # A real reply should have at least the active slot's value
+        # non-zero, and dpi_count/dpi_index need to be in sane ranges
+        # (1-6 slots). This also catches cross-contamination from a
+        # leftover getDeviceInfo reply landing here by accident — that
+        # packet's byte 4 is part of the device_id string, which when
+        # split into nibbles produces implausible count/index values.
+        # (Previously this only checked "all 6 slots zero", which
+        # missed a real corrupted-count-byte case caught by
+        # h2_battery.py's CLI but silently accepted here — this brings
+        # the two into sync.)
+        count = r[4] & 0x0F
+        index = (r[4] >> 4) & 0x0F
+        if not (1 <= count <= DPI_SLOT_COUNT) or index >= DPI_SLOT_COUNT:
+            return True
         return all(r[o] == 0 and r[o + 1] == 0 for o in slot_offsets)
 
-    resp = send_and_read(dev, arr, retry_on=looks_empty)
+    resp = send_and_read(dev, arr, retry_on=looks_wrong)
     dpi_index = (resp[4] >> 4) & 0x0F
     dpi_count = resp[4] & 0x0F
     levels = [decode_dpi(_combine(resp[o], resp[o + 1]), ic_type) for o in slot_offsets]
@@ -569,7 +583,7 @@ class H2ControlWindow(QMainWindow):
             self.ic_type = info["ic_type"]
 
             self.rate_combo.setCurrentText(str(rate))
-            self.count_spin.setValue(dpi["dpi_count"] or 1)
+            self.count_spin.setValue(dpi["dpi_count"])
             active_btn = self.active_group.button(dpi["dpi_index"])
             if active_btn:
                 active_btn.setChecked(True)

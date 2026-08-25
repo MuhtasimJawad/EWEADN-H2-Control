@@ -22,6 +22,10 @@ Usage:
     python3 h2_battery.py --set-rate 1000         # set polling rate (125/250/500/1000 Hz)
     python3 h2_battery.py --set-dpi 3 3200        # set DPI slot 3 (1-6) to 3200
     python3 h2_battery.py --set-active-dpi 2      # switch the active DPI slot to 2 (1-6)
+
+    python3 h2_battery.py --get-buttons           # show current button bindings
+    python3 h2_battery.py --set-button 4 2 0      # rebind slot 4 to act as right-click
+    python3 h2_battery.py --reset-buttons         # restore factory button defaults
 """
 
 import argparse
@@ -381,6 +385,157 @@ def set_active_dpi(dev, slot, ic_type=17):
     set_dpi_config(dev, cfg["levels"], slot - 1, cfg["dpi_count"], ic_type)
 
 
+def set_dpi_count(dev, count, ic_type=17):
+    """
+    Sets how many DPI slots are in rotation (cycled through by the
+    mouse's onboard DPI button), without changing any slot values or
+    which slot is active. Mainly a recovery tool — count is normally
+    left alone by --set-dpi/--set-active-dpi, which both preserve
+    whatever the current count already is.
+    """
+    if not (1 <= count <= DPI_SLOT_COUNT):
+        raise ValueError(f"count must be 1-{DPI_SLOT_COUNT}")
+    cfg = get_dpi_config(dev, ic_type)
+    set_dpi_config(dev, cfg["levels"], cfg["dpi_index"], count, ic_type)
+
+
+# ---------------------------------------------------------------------------
+# Button remapping
+#
+# Reverse-engineered from getMouseKeys()/setMouseKeys()/resetAllMouseKeys()
+# in the driver's JS. Only the standard-mouse-button type (32) is
+# implemented here — the driver also supports keyboard shortcuts
+# (type 128: code1=modifier bitmask, code2=keycode) and macros (type
+# 160: code1=loop mode, code2=repeat count), but the exact keycode
+# value tables for those aren't in this file, so wiring them up risks
+# sending a "valid-looking" but wrong keycode. Only extend
+# MOUSE_BUTTON_TYPE remapping is implemented/tested for now.
+# ---------------------------------------------------------------------------
+
+BUTTON_SLOT_COUNT = 6
+MOUSE_BUTTON_TYPE = 32  # type value for "standard mouse button" bindings
+
+# code1 bitmask values seen as factory defaults for a standard mouse
+# button binding — matches the standard USB HID mouse button convention.
+MOUSE_BUTTON_LEFT = 1
+MOUSE_BUTTON_RIGHT = 2
+MOUSE_BUTTON_MIDDLE = 4
+MOUSE_BUTTON_BACK = 8
+MOUSE_BUTTON_FORWARD = 16
+
+# Factory-default binding for all 6 slots, taken directly from
+# resetAllMouseKeys()'s hardcoded array. Slot 6's type=80 isn't one of
+# the four selectable binding types in the driver's UI (32/128/144/160)
+# — it's very likely a fixed "DPI cycle" button, but that's inferred
+# from context (it's the extra button beyond the standard 5), not
+# confirmed from the JS directly.
+DEFAULT_BUTTON_BINDINGS = [
+    (MOUSE_BUTTON_TYPE, MOUSE_BUTTON_LEFT, 0),
+    (MOUSE_BUTTON_TYPE, MOUSE_BUTTON_RIGHT, 0),
+    (MOUSE_BUTTON_TYPE, MOUSE_BUTTON_MIDDLE, 0),
+    (MOUSE_BUTTON_TYPE, MOUSE_BUTTON_BACK, 0),
+    (MOUSE_BUTTON_TYPE, MOUSE_BUTTON_FORWARD, 0),
+    (80, 1, 0),  # inferred DPI-cycle button, see note above
+]
+
+
+KNOWN_BUTTON_TYPES = {0, MOUSE_BUTTON_TYPE, 50, 80, 128, 144, 160}
+
+
+def get_button_bindings(dev):
+    """Returns a list of 6 (type, code1, code2) tuples, one per button slot."""
+    arr = [0x00, 17] + [0x00] * 31  # cmd 0x11 = getMouseKeys
+
+    def looks_wrong(r):
+        # A genuine getMouseKeys reply should have all 6 slot "type"
+        # bytes drawn from the known set. If any slot's type falls
+        # outside that set, this is very likely a stale/mismatched
+        # reply from a DIFFERENT command (e.g. getDeviceInfo) caught
+        # instead of ours.
+        for i in range(BUTTON_SLOT_COUNT):
+            if r[4 + 3 * i] not in KNOWN_BUTTON_TYPES:
+                return True
+
+        # A torn/transitional read (caught mid-EEPROM-commit) doesn't
+        # necessarily come back fully zeroed in every slot — in
+        # practice it showed up as MOST slots zeroed with one or two
+        # slots holding a technically-valid-looking but implausible
+        # partial value (e.g. type=32/mouse-button with code1=0, which
+        # isn't a real button bitmask). A real configured mouse should
+        # essentially never have a majority of its 6 slots reading as
+        # entirely unassigned (type=0) at once, so treat that as a
+        # strong signal something's still settling.
+        empty_slots = sum(
+            1 for i in range(BUTTON_SLOT_COUNT)
+            if r[4 + 3 * i] == 0 and r[5 + 3 * i] == 0 and r[6 + 3 * i] == 0
+        )
+        if empty_slots >= 3:
+            return True
+
+        return False
+
+    resp = send_and_read(
+        dev, arr, min_resp_len=4 + BUTTON_SLOT_COUNT * 3,
+        retry_on=looks_wrong, attempts=6,
+    )
+    bindings = []
+    for i in range(BUTTON_SLOT_COUNT):
+        offset = 4 + 3 * i
+        bindings.append((resp[offset], resp[offset + 1], resp[offset + 2]))
+    return bindings
+
+
+def set_button_bindings(dev, bindings):
+    """
+    Writes all 6 button slots at once (same whole-table pattern as DPI
+    — the protocol has no single-slot write). `bindings` is a list of
+    up to 6 (type, code1, code2) tuples; any slots beyond len(bindings)
+    keep their factory-default binding from DEFAULT_BUTTON_BINDINGS
+    (matching exactly what the driver's own setMouseKeys() does — it
+    always starts from the same hardcoded defaults before overwriting).
+    """
+    if len(bindings) > BUTTON_SLOT_COUNT:
+        raise ValueError(f"at most {BUTTON_SLOT_COUNT} bindings, got {len(bindings)}")
+
+    arr = [0x00] * 33
+    arr[1] = 9  # cmd 0x09 = setMouseKeys
+    arr[3] = 1
+    arr[4] = 15
+
+    offset = 5
+    for i in range(BUTTON_SLOT_COUNT):
+        type_, code1, code2 = bindings[i] if i < len(bindings) else DEFAULT_BUTTON_BINDINGS[i]
+        arr[offset:offset + 3] = [type_ & 0xFF, code1 & 0xFF, code2 & 0xFF]
+        offset += 3
+
+    # A slightly longer settle delay than the default (0.3s) — button
+    # table commits appear to need a bit more time before a follow-up
+    # read reliably returns the new state rather than a transitional
+    # all-zero reply.
+    # Button-table commits appear to need noticeably longer to settle
+    # than DPI/rate writes — 0.3s and then 0.5s both still produced a
+    # transitional/mostly-zero read immediately afterward during
+    # testing. 1.0s is a generous buffer; it only costs real time on
+    # an explicit user-initiated write, not on every read.
+    resp = send_write_command(dev, arr, settle_delay=1.0)
+    if resp is None:
+        print("[warn] no ack received for set_button_bindings — verify with --get-buttons before trusting the change", file=sys.stderr)
+
+
+def set_single_button(dev, slot, type_, code1, code2=0):
+    """slot is 1-6. Reads the current bindings, changes just one slot, writes the whole table back."""
+    if not (1 <= slot <= BUTTON_SLOT_COUNT):
+        raise ValueError(f"slot must be 1-{BUTTON_SLOT_COUNT}")
+    bindings = get_button_bindings(dev)
+    bindings[slot - 1] = (type_, code1, code2)
+    set_button_bindings(dev, bindings)
+
+
+def reset_button_bindings(dev):
+    """Restores all 6 button slots to factory defaults."""
+    set_button_bindings(dev, [])
+
+
 # ---------------------------------------------------------------------------
 # Bar/daemon helpers
 # ---------------------------------------------------------------------------
@@ -453,6 +608,16 @@ def main():
                          help="set DPI slot (1-6) to VALUE, e.g. --set-dpi 3 3200")
     parser.add_argument("--set-active-dpi", type=int, metavar="SLOT",
                          help="switch the active DPI slot (1-6) without changing values")
+    parser.add_argument("--set-dpi-count", type=int, metavar="COUNT",
+                         help="set how many DPI slots (1-6) are in rotation on the onboard "
+                              "DPI button, without changing values or the active slot. "
+                              "Mainly a recovery tool if dpi_count ever ends up wrong.")
+    parser.add_argument("--get-buttons", action="store_true", help="show current button bindings for all 6 slots")
+    parser.add_argument("--set-button", nargs=3, type=int, metavar=("SLOT", "MOUSE_BUTTON", "UNUSED"),
+                         help="rebind button SLOT (1-6) to act as mouse button MOUSE_BUTTON "
+                              "(1=left, 2=right, 4=middle, 8=back, 16=forward). Third arg is "
+                              "unused for this binding type but required — pass 0.")
+    parser.add_argument("--reset-buttons", action="store_true", help="restore all 6 button slots to factory defaults")
     args = parser.parse_args()
 
     if args.daemon:
@@ -494,6 +659,48 @@ def main():
             info = fresh(get_battery_info)
             fresh(set_active_dpi, args.set_active_dpi, info["ic_type"])
             print(f"Active DPI slot switched to {args.set_active_dpi}")
+            return
+
+        if args.set_dpi_count is not None:
+            info = fresh(get_battery_info)
+            fresh(set_dpi_count, args.set_dpi_count, info["ic_type"])
+            print(f"DPI count set to {args.set_dpi_count}")
+            print(fresh(get_dpi_config, info["ic_type"]))
+            return
+
+        def describe_binding(type_, code1, code2):
+            if type_ == MOUSE_BUTTON_TYPE:
+                names = {1: "left click", 2: "right click", 4: "middle click",
+                          8: "back", 16: "forward"}
+                return names.get(code1, f"mouse button (code1={code1})")
+            elif type_ == 80:
+                return "DPI cycle (inferred)"
+            elif type_ == 128:
+                return f"keyboard shortcut (raw: modifiers={code1}, keycode={code2})"
+            elif type_ == 160:
+                return f"macro (raw: code1={code1}, code2={code2})"
+            else:
+                return f"unknown type={type_} (raw: code1={code1}, code2={code2})"
+
+        def print_bindings(bindings):
+            for i, (type_, code1, code2) in enumerate(bindings, start=1):
+                print(f"Slot {i}: {describe_binding(type_, code1, code2)}")
+
+        if args.get_buttons:
+            print_bindings(fresh(get_button_bindings))
+            return
+
+        if args.set_button is not None:
+            slot, mouse_button, _unused = args.set_button
+            fresh(set_single_button, slot, MOUSE_BUTTON_TYPE, mouse_button, 0)
+            print(f"Button slot {slot} rebound to mouse button {mouse_button} — reading back to confirm:")
+            print_bindings(fresh(get_button_bindings))
+            return
+
+        if args.reset_buttons:
+            fresh(reset_button_bindings)
+            print("All button bindings reset to factory defaults — reading back to confirm:")
+            print_bindings(fresh(get_button_bindings))
             return
 
         if args.get_config:
