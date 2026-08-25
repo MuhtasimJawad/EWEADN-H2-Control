@@ -31,7 +31,9 @@ Two things this app does that the official web driver doesn't:
 - Fullscreen support (`F11` to toggle, `Esc` to exit)
 - Toast notifications when a setting is applied
 - Ships as a single self-contained AppImage — no system Python packages required
-- Headless CLI tool included: `h2_battery.py` — battery, DPI, and polling rate control from the terminal, plus a `--daemon` mode for piping battery % straight into Waybar, Quickshell, etc.
+- Headless CLI tool included: `h2_battery.py` — battery, DPI, polling rate, **and button remapping** from the terminal, plus a `--daemon` mode for piping battery % straight into Waybar, Quickshell, etc.
+
+> **Button remapping** (standard mouse-button bindings — left/right/middle/back/forward) is available via the CLI tool (`h2_battery.py --get-buttons` / `--set-button`) but not yet in the GUI. GUI support is planned.
 
 ## Screenshots
 
@@ -173,7 +175,7 @@ rule and replugging, it's worth trying each mechanism in isolation to
 see which one your system actually needs.
 
 **"EWEADN H2 not found"**
-Make sure the mouse is connected — via the 2.4G dongl or wired USB
+Make sure the mouse is connected — via the 2.4G dongle or wired USB
 cable — and `lsusb` shows one of its two possible IDs:
 `089d:062f` (wireless dongle mode) or `088d:062e` (wired/charging
 mode). If both the dongle and a USB cable are connected at the same
@@ -233,7 +235,7 @@ build via pip.
 | File | Purpose |
 |---|---|
 | `h2_gui_qt.py` | The GUI application (PySide6/Qt) |
-| `h2_battery.py` | Command-line version — battery reading, `--get-config`, `--set-rate`, `--set-dpi`, `--set-active-dpi`, and a `--daemon` mode for status-bar integrations (Waybar, Quickshell, etc.) |
+| `h2_battery.py` | Command-line version — battery reading, `--get-config`, `--set-rate`, `--set-dpi`, `--set-active-dpi`, `--set-dpi-count`, `--get-buttons`, `--set-button`, `--reset-buttons`, and a `--daemon` mode for status-bar integrations (Waybar, Quickshell, etc.) |
 | `build_appimage_qt.sh` | Builds the AppImage from `h2_gui_qt.py` |
 | `screenshots/` | Images used in this README |
 
@@ -242,14 +244,38 @@ build via pip.
 The H2 has no Linux driver, so this talks directly to its vendor HID
 interface (interface 2 of 3 — the other two are the standard mouse and
 keyboard boot interfaces). The command protocol — battery/firmware
-query, DPI table read/write, polling rate read/write, and the checksum
-scheme every command shares — was reverse-engineered from the official
-web-based configurator, which uses the WebHID API and is reachable at
-`hub.eweadn.cn`.
+query, DPI table read/write, polling rate read/write, button-binding
+read/write, and the checksum scheme every command shares — was
+reverse-engineered from the official web-based configurator, which
+uses the WebHID API and is reachable at `hub.eweadn.cn`.
 
 DPI values only decode correctly for `ic_type == 17`, which is what
 this specific H2 revision reports; other EWEADN mice or firmware
 revisions may use different encoding breakpoints.
+
+## Version History
+
+**v1.1.0**
+- Fixed: a data-validation gap where a corrupted DPI-slot-count value
+  could be silently accepted and displayed as if it were valid, instead
+  of being caught and retried
+- Added CLI button remapping to `h2_battery.py`: `--get-buttons`,
+  `--set-button SLOT MOUSE_BUTTON`, `--reset-buttons` (standard
+  mouse-button bindings — left/right/middle/back/forward)
+- Added `--set-dpi-count` to `h2_battery.py` — a recovery flag for
+  manually correcting the DPI slot count if it's ever wrong, without
+  touching slot values
+
+**v1.0.1**
+- Fixed: mouse not working while connected/charging via USB cable — the
+  device presents a different USB identity (`088d:062e`) than its
+  wireless dongle mode (`089d:062f`), which wasn't being checked
+- Updated udev rule to cover both USB identities across `hidraw`, raw
+  `usb`, and systemd `uaccess` access mechanisms
+
+**v1.0.0**
+- Initial release: battery, firmware, DPI (6 slots), polling rate, dark
+  mode, fullscreen support, toast notifications
 
 ## Disclaimer
 
