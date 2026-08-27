@@ -39,7 +39,7 @@ import sys
 import time
 
 from h2_protocol import (
-    open_device, get_battery_info, get_report_rate, set_report_rate,
+    open_device, run_isolated, get_battery_info, get_report_rate, set_report_rate,
     get_dpi_config, set_single_dpi, set_active_dpi, set_dpi_count,
     get_button_bindings, set_single_button, reset_button_bindings,
     MOUSE_BUTTON_TYPE, DPI_CYCLE_TYPE, DPI_CYCLE_CODES,
@@ -143,20 +143,13 @@ def main():
             sys.exit(0)
         return
 
-    def fresh(fn, *fn_args):
-        """
-        Opens a brand-new connection for a single command and closes it
-        immediately after. Deliberately NOT reusing one connection across
-        multiple chained commands (e.g. battery -> rate -> dpi) — a
-        leftover/delayed reply from an earlier command was observed
-        bleeding into the next command's read on a shared connection,
-        producing corrupted data. A fresh handle per command avoids that.
-        """
-        dev = open_device()
-        try:
-            return fn(dev, *fn_args)
-        finally:
-            dev.close()
+    # Every device command goes through h2_protocol.run_isolated — a
+    # fresh connection per single command, never chained. See
+    # run_isolated's docstring for why (a leftover reply from an
+    # earlier command bleeding into the next command's read on a
+    # shared connection is exactly what caused a real bug in the GUI's
+    # battery display).
+    fresh = run_isolated
 
     try:
         if args.set_rate is not None:

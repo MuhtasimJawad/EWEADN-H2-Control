@@ -3,10 +3,14 @@
 h2_gui_qt.py — Qt control panel for the EWEADN H2 mouse.
 
 Shows model, firmware version, and battery percentage. Lets you change
-the USB polling rate via a dropdown, and edit all 6 DPI slots via
-linked spin boxes + sliders, including which slot is active and how
-many slots are in rotation. Supports fullscreen (F11 to toggle, Esc to
+the USB polling rate via a dropdown and edit all 6 DPI slots via linked
+spin boxes + sliders (including which slot is active and how many
+slots are in rotation). Supports fullscreen (F11 to toggle, Esc to
 exit fullscreen).
+
+Button remapping (standard mouse button, DPI cycle, fire key, media
+key, keyboard shortcut) is available via the CLI tool (h2_battery.py)
+but not yet in this GUI — a Buttons tab is planned for a future release.
 
 Requires: pip install PySide6 hidapi --break-system-packages
 Requires a udev rule granting access to the H2's hidraw node (see the
@@ -25,14 +29,15 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
 )
 
-# All HID/protocol logic (device discovery, command bytes, DPI/button
+# All HID/protocol logic (device discovery, command bytes, DPI
 # encode-decode) lives in h2_protocol.py, shared with h2_battery.py — see
-# that module's docstring for the reverse-engineering notes. This file
-# used to duplicate all of it; importing instead means a protocol fix
-# only has to be made in one place.
+# that module's docstring for the reverse-engineering notes, and its
+# run_isolated()/​_read_device_info() docstrings for the bugfix history
+# behind why every command below goes through run_isolated() rather
+# than being chained on one shared connection.
 from h2_protocol import (
     DPI_SLOT_COUNT,
-    open_device, get_battery_info, get_report_rate, set_report_rate,
+    run_isolated, get_battery_info, get_report_rate, set_report_rate,
     get_dpi_config, set_dpi_config,
 )
 
@@ -147,6 +152,7 @@ class H2ControlWindow(QMainWindow):
 
         self.ic_type = 17
         self._workers = []  # keep references so QThreads aren't GC'd mid-run
+        self._busy = False
         self._light_palette = QApplication.instance().palette()
 
         self._build_ui()
@@ -165,9 +171,9 @@ class H2ControlWindow(QMainWindow):
         layout = QVBoxLayout(central)
 
         top_bar = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.refresh)
-        top_bar.addWidget(refresh_btn)
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(self.refresh)
+        top_bar.addWidget(self.refresh_btn)
         top_bar.addStretch()
         self.dark_mode_checkbox = QCheckBox("Dark Mode")
         self.dark_mode_checkbox.toggled.connect(self.toggle_dark_mode)
@@ -199,9 +205,9 @@ class H2ControlWindow(QMainWindow):
         self.rate_combo.setCurrentText("500")
         rate_row.addWidget(self.rate_combo)
         rate_row.addWidget(QLabel("Hz"))
-        rate_apply_btn = QPushButton("Apply")
-        rate_apply_btn.clicked.connect(self.apply_rate)
-        rate_row.addWidget(rate_apply_btn)
+        self.rate_apply_btn = QPushButton("Apply")
+        self.rate_apply_btn.clicked.connect(self.apply_rate)
+        rate_row.addWidget(self.rate_apply_btn)
         rate_row.addStretch()
         layout.addWidget(rate_box)
 
@@ -251,9 +257,9 @@ class H2ControlWindow(QMainWindow):
 
         dpi_layout.addLayout(dpi_grid)
 
-        apply_dpi_btn = QPushButton("Apply DPI Settings")
-        apply_dpi_btn.clicked.connect(self.apply_dpi)
-        dpi_layout.addWidget(apply_dpi_btn)
+        self.apply_dpi_btn = QPushButton("Apply DPI Settings")
+        self.apply_dpi_btn.clicked.connect(self.apply_dpi)
+        dpi_layout.addWidget(self.apply_dpi_btn)
 
         layout.addWidget(dpi_box)
         layout.addStretch()
@@ -290,18 +296,34 @@ class H2ControlWindow(QMainWindow):
     # ---- background task helper ----
 
     def _run_bg(self, fn, on_done=None):
+        # Only one command talks to the device at a time — running two
+        # concurrently (e.g. clicking Apply DPI while a rate write is
+        # still in flight, or while the CLI tool is mid-command) is
+        # exactly the kind of concurrent access that's caused real
+        # corruption in testing.
+        if self._busy:
+            return
+        self._busy = True
+        self._set_controls_enabled(False)
+
         worker = Worker(fn)
         self._workers.append(worker)
 
         def cleanup():
             if worker in self._workers:
                 self._workers.remove(worker)
+            self._busy = False
+            self._set_controls_enabled(True)
 
         if on_done:
             worker.done.connect(on_done)
         worker.error.connect(self._show_error)
         worker.finished.connect(cleanup)
         worker.start()
+
+    def _set_controls_enabled(self, enabled):
+        for btn in (self.refresh_btn, self.rate_apply_btn, self.apply_dpi_btn):
+            btn.setEnabled(enabled)
 
     def _show_error(self, msg):
         self.status_bar.showMessage(f"Error: {msg}")
@@ -311,11 +333,7 @@ class H2ControlWindow(QMainWindow):
 
     def refresh_battery(self):
         def task():
-            dev = open_device()
-            try:
-                return get_battery_info(dev)
-            finally:
-                dev.close()
+            return run_isolated(get_battery_info)
 
         def done(info):
             charging = " (charging)" if info["charge_flag"] else ""
@@ -330,16 +348,19 @@ class H2ControlWindow(QMainWindow):
         self.status_bar.showMessage("Reading current settings…")
 
         def task():
-            dev = open_device()
-            try:
-                info = get_battery_info(dev)
-                time.sleep(0.1)
-                rate = get_report_rate(dev)
-                time.sleep(0.1)
-                dpi = get_dpi_config(dev, ic_type=info["ic_type"])
-                return info, rate, dpi
-            finally:
-                dev.close()
+            # Each read gets its own connection — never chained on one
+            # open handle. A leftover reply from an earlier command can
+            # otherwise bleed into the next command's read on a shared
+            # connection; see run_isolated's docstring in h2_protocol.py
+            # for the real bug that caused (a stale button-bindings
+            # reply's bytes occasionally showing up as the battery
+            # percentage and device ID in an earlier build of this app).
+            info = run_isolated(get_battery_info)
+            time.sleep(0.1)
+            rate = run_isolated(get_report_rate)
+            time.sleep(0.1)
+            dpi = run_isolated(get_dpi_config, ic_type=info["ic_type"])
+            return info, rate, dpi
 
         def done(result):
             info, rate, dpi = result
@@ -366,11 +387,7 @@ class H2ControlWindow(QMainWindow):
         self.status_bar.showMessage(f"Setting rate to {hz}Hz…")
 
         def task():
-            dev = open_device()
-            try:
-                set_report_rate(dev, hz)
-            finally:
-                dev.close()
+            run_isolated(set_report_rate, hz)
 
         def done(_):
             self.toast.show_message(f"Polling rate set to {hz}Hz")
@@ -389,11 +406,7 @@ class H2ControlWindow(QMainWindow):
         self.status_bar.showMessage("Writing DPI settings…")
 
         def task():
-            dev = open_device()
-            try:
-                set_dpi_config(dev, levels, active, count, ic_type)
-            finally:
-                dev.close()
+            run_isolated(set_dpi_config, levels, active, count, ic_type)
 
         def done(_):
             self.toast.show_message("DPI settings applied")

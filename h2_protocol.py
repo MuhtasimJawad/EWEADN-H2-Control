@@ -110,6 +110,28 @@ def open_device():
     return dev
 
 
+def run_isolated(fn, *args, **kwargs):
+    """
+    Opens a brand-new connection, runs exactly one protocol function,
+    and closes it immediately after. Deliberately NOT reused across
+    multiple chained commands (e.g. battery -> rate -> dpi -> buttons
+    on one open handle) — a leftover/delayed reply from an earlier
+    command can bleed into the next command's read on a shared
+    connection. This is what caused the GUI's battery panel to
+    occasionally show a stale getMouseKeys (button-bindings) reply's
+    bytes as if they were battery/device-info data (see
+    _read_device_info's validator comment for the other half of that
+    fix). Every call site that talks to the device — CLI and GUI alike
+    — should route through this rather than opening its own handle and
+    chaining commands on it.
+    """
+    dev = open_device()
+    try:
+        return fn(dev, *args, **kwargs)
+    finally:
+        dev.close()
+
+
 def drain_stale_reports(dev, max_drain=20):
     """
     Flush any reports the device already pushed before we asked for
@@ -260,10 +282,53 @@ def _combine(lo, hi):
 
 def _read_device_info(dev):
     arr = [0x00, 0x30] + [0x00] * 31  # cmd 0x30 = getDeviceInfo
-    return send_and_read(
-        dev, arr, min_resp_len=15,
-        retry_on=lambda r: r[11] == 0 or r[10] == 0,  # report_max or ic_type looking wrong
-    )
+
+    def looks_wrong(r):
+        # BUG HISTORY: this validator used to only check "r[10]==0 or
+        # r[11]==0" (ic_type/report_max non-zero). That's nowhere near
+        # specific enough — a stale getMouseKeys (button-bindings)
+        # reply landing here instead (e.g. from a caller chaining
+        # commands on one open connection — see run_isolated's
+        # docstring) satisfies it too, purely by coincidence: with the
+        # factory-default bindings, that reply's byte 10/11 (slot 3's
+        # type/code1) are 32/4 — both non-zero — so the old check
+        # waved it straight through. The result: battery_value read as
+        # 32 (slot 4's type byte) and device_id decoded from slot
+        # bytes into unprintable control characters (rendered as a box
+        # glyph in the GUI). Confirmed by reproducing byte-for-byte
+        # against DEFAULT_BUTTON_BINDINGS.
+        #
+        # The fix checks several independent, specific properties of a
+        # genuine getDeviceInfo reply at once — a stray reply from a
+        # different command would have to satisfy ALL of them
+        # simultaneously by coincidence, which is what actually makes
+        # this a meaningful check rather than a single easily-faked one.
+        ic_type, report_max, charge_flag, battery_value, connect_status = r[10], r[11], r[12], r[13], r[14]
+
+        if ic_type == 0 or report_max == 0:
+            return True
+        if not (0 <= ic_type <= 250) or not (0 <= report_max <= 250):
+            return True
+        if charge_flag not in (0, 1):
+            return True
+        if not (0 <= battery_value <= 100):
+            return True
+        if not (0 <= connect_status <= 5):
+            return True
+
+        # device_id should be a short printable model code (e.g.
+        # "M302") — every non-zero byte should be an uppercase letter
+        # or digit. A button-bindings reply's type/code bytes are
+        # essentially never all simultaneously in that range (32 is
+        # space, most code1/code2 values fall outside A-Z/0-9 too).
+        device_id_bytes = r[4:8]
+        for b in device_id_bytes:
+            if b != 0 and not (48 <= b <= 57 or 65 <= b <= 90):
+                return True
+
+        return False
+
+    return send_and_read(dev, arr, min_resp_len=15, retry_on=looks_wrong)
 
 
 def get_battery_info(dev):
