@@ -31,9 +31,16 @@ Two things this app does that the official web driver doesn't:
 - Fullscreen support (`F11` to toggle, `Esc` to exit)
 - Toast notifications when a setting is applied
 - Ships as a single self-contained AppImage — no system Python packages required
-- Headless CLI tool included: `h2_battery.py` — battery, DPI, polling rate, **and button remapping** from the terminal, plus a `--daemon` mode for piping battery % straight into Waybar, Quickshell, etc.
+- Headless CLI tool included: `h2_battery.py` — battery, DPI, polling rate, **and full button remapping** from the terminal, plus a `--daemon` mode for piping battery % straight into Waybar, Quickshell, etc.
 
-> **Button remapping** (standard mouse-button bindings — left/right/middle/back/forward) is available via the CLI tool (`h2_battery.py --get-buttons` / `--set-button`) but not yet in the GUI. GUI support is planned.
+> **Button remapping** is available via the CLI tool (`h2_battery.py`) but not yet in the GUI — GUI support is planned. The CLI can rebind any of the 6 buttons to:
+> - a **standard mouse button** (left/right/middle/back/forward) — `--set-button`
+> - a **DPI-cycle action** (loop / step up / step down) — `--set-dpi-cycle-button`
+> - a **fire-key action** (double-click or rapid-fire) — `--set-fire-button`
+> - a **media key** (volume, playback, browser navigation, etc.) — `--set-media-button`
+> - a **keyboard shortcut**, using real key names instead of raw codes (e.g. `ctrl+shift c`) — `--set-keyboard-button`
+>
+> Macro bindings are not supported — see [Known Limitations](#known-limitations).
 
 ## Screenshots
 
@@ -234,8 +241,9 @@ build via pip.
 
 | File | Purpose |
 |---|---|
+| `h2_protocol.py` | Shared HID/protocol layer — device discovery, command encoding, checksum/read/write plumbing, DPI encode/decode, and all button-binding tables. Imported by both `h2_battery.py` and `h2_gui_qt.py` so the protocol logic only lives in one place. |
 | `h2_gui_qt.py` | The GUI application (PySide6/Qt) |
-| `h2_battery.py` | Command-line version — battery reading, `--get-config`, `--set-rate`, `--set-dpi`, `--set-active-dpi`, `--set-dpi-count`, `--get-buttons`, `--set-button`, `--reset-buttons`, and a `--daemon` mode for status-bar integrations (Waybar, Quickshell, etc.) |
+| `h2_battery.py` | Command-line version — battery reading, `--get-config`, `--set-rate`, `--set-dpi`, `--set-active-dpi`, `--set-dpi-count`, `--get-buttons`, `--set-button`, `--set-dpi-cycle-button`, `--set-fire-button`, `--set-media-button`, `--set-keyboard-button`, `--reset-buttons`, and a `--daemon` mode for status-bar integrations (Waybar, Quickshell, etc.) |
 | `build_appimage_qt.sh` | Builds the AppImage from `h2_gui_qt.py` |
 | `screenshots/` | Images used in this README |
 
@@ -249,11 +257,68 @@ read/write, and the checksum scheme every command shares — was
 reverse-engineered from the official web-based configurator, which
 uses the WebHID API and is reachable at `hub.eweadn.cn`.
 
+The button-binding code1/code2 values for DPI-cycle, fire-key, and
+media-key bindings come from a static keycode table embedded directly
+in the configurator's JS bundle; the keyboard-shortcut modifier bitmask
+was recovered from the same bundle's UI-handler logic rather than a
+table. All of this protocol logic — plumbing, DPI math, and every
+binding type — lives in one shared module, `h2_protocol.py`, so the CLI
+and GUI stay in sync instead of drifting apart.
+
 DPI values only decode correctly for `ic_type == 17`, which is what
 this specific H2 revision reports; other EWEADN mice or firmware
 revisions may use different encoding breakpoints.
 
+## Known Limitations
+
+- **Macro bindings (button type 160) are not supported**, in either the
+  CLI or the GUI. Writing a macro needs a second command
+  (`setMouseMacro`) built by a packer function that hasn't been fully
+  reverse-engineered yet, and getting it wrong risks corrupting the
+  mouse's macro storage — so this is deliberately left out until it can
+  be done safely.
+- **Button remapping is CLI-only for now.** The GUI doesn't yet have a
+  Buttons tab; use `h2_battery.py` for all button-binding changes in
+  the meantime.
+
 ## Version History
+
+**v1.2.1**
+- **Fixed a critical data-validation bug**: the battery/device-info
+  reader could occasionally accept a stray reply meant for a different
+  command as if it were genuine device info — surfacing as a wrong
+  battery percentage and a garbled/unprintable model name in the GUI's
+  Device panel (e.g. `32%` and `EWEADN H2(☐)` instead of the real
+  `57%` and `EWEADN H2(M302)`). The validator now checks several
+  independent, specific properties of a real device-info reply at once
+  (battery ≤ 100, charge flag is 0/1, device ID is printable
+  model-code characters, and more), so a reply from the wrong command
+  can no longer slip through by coincidence. Every device command in
+  both the CLI and the GUI also now gets its own isolated connection
+  rather than being chained on one shared handle, removing the
+  specific trigger that surfaced this in practice
+- No feature changes — this is a bugfix-only release. The GUI's
+  Buttons tab is still in development and not part of this release
+
+**v1.2.0**
+- Added four new CLI button-binding types to `h2_battery.py`, on top of
+  the existing standard mouse-button binding:
+  - **DPI-cycle** (`--set-dpi-cycle-button SLOT loop|up|down`)
+  - **Fire-key** (`--set-fire-button SLOT doubleclick|fire`)
+  - **Media keys** (`--set-media-button SLOT KEY` — volume, playback,
+    browser navigation, and more)
+  - **Keyboard shortcuts** (`--set-keyboard-button SLOT MODIFIERS KEY`),
+    using real key names (`ctrl+shift c`, `alt f4`) instead of raw USB
+    HID codes
+- `--get-buttons` now decodes and names all of the above instead of
+  falling back to a raw/unknown-type dump
+- Internal refactor: extracted all HID/protocol logic — device
+  discovery, command encoding, DPI math, and every button-binding
+  table — into a new shared module, `h2_protocol.py`, imported by both
+  `h2_battery.py` and `h2_gui_qt.py`. No user-facing behavior change;
+  keeps the CLI and GUI from drifting out of sync going forward
+- Macro bindings (type 160) remain deliberately unimplemented — see
+  [Known Limitations](#known-limitations)
 
 **v1.1.0**
 - Fixed: a data-validation gap where a corrupted DPI-slot-count value
