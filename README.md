@@ -43,6 +43,12 @@ Two things this app does that the official web driver doesn't:
 >
 > Macro bindings are not supported — see [Known Limitations](#known-limitations).
 
+
+## Screenshots
+
+![EWEADN H2 Control main window — dark mode, showing device info, polling rate, and DPI level sliders](screenshots/main-window.png)
+
+
 ## Requirements
 
 - Linux, x86_64
