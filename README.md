@@ -46,7 +46,7 @@ Two things this app does that the official web driver doesn't:
 
 ## Screenshots
 
-![EWEADN H2 Control main window — dark mode, showing device info, polling rate, and DPI level sliders](screenshots/main-window.png)
+![EWEADN H2 Control main window — dark mode, showing device info, polling rate, and DPI level sliders](screenshots/main-window.png) ![EWEADN H2 Control button remap window](screenshots/button-remap-window.png)
 
 
 ## Requirements
