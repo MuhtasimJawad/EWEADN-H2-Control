@@ -27,18 +27,19 @@ Two things this app does that the official web driver doesn't:
 - Polling rate control — 125 / 250 / 500 / 1000 Hz
 - All 6 DPI slots, each with a linked spin box + slider (50–32000 DPI)
 - Select which DPI slot is active, and how many slots are in rotation
+- **Full button remapping**, in both the GUI's **Buttons** tab and the CLI — see [Remapping buttons](#remapping-buttons) below
 - Dark mode toggle
 - Fullscreen support (`F11` to toggle, `Esc` to exit)
 - Toast notifications when a setting is applied
 - Ships as a single self-contained AppImage — no system Python packages required
-- Headless CLI tool included: `h2_battery.py` — battery, DPI, polling rate, **and full button remapping** from the terminal, plus a `--daemon` mode for piping battery % straight into Waybar, Quickshell, etc.
+- Headless CLI tool included: `h2_battery.py` — battery, DPI, polling rate, and full button remapping from the terminal, plus a `--daemon` mode for piping battery % straight into Waybar, Quickshell, etc.
 
-> **Button remapping** is available via the CLI tool (`h2_battery.py`) but not yet in the GUI — GUI support is planned. The CLI can rebind any of the 6 buttons to:
-> - a **standard mouse button** (left/right/middle/back/forward) — `--set-button`
-> - a **DPI-cycle action** (loop / step up / step down) — `--set-dpi-cycle-button`
-> - a **fire-key action** (double-click or rapid-fire) — `--set-fire-button`
-> - a **media key** (volume, playback, browser navigation, etc.) — `--set-media-button`
-> - a **keyboard shortcut**, using real key names instead of raw codes (e.g. `ctrl+shift c`) — `--set-keyboard-button`
+> Any of the 6 buttons can be rebound to:
+> - a **standard mouse button** (left/right/middle/back/forward)
+> - a **DPI-cycle action** (loop / step up / step down)
+> - a **fire-key action** (double-click or rapid-fire)
+> - a **media key** (volume, playback, browser navigation, etc.)
+> - a **keyboard shortcut** — press it directly in the GUI, or use real key names instead of raw codes in the CLI (e.g. `ctrl+shift c`)
 >
 > Macro bindings are not supported — see [Known Limitations](#known-limitations).
 
@@ -143,9 +144,10 @@ sudo pacman -S fuse2
 
 | Section | What it does |
 |---|---|
-| **Device** | Shows model, firmware version, and battery % (auto-refreshes) |
-| **Polling Rate** | Pick 125/250/500/1000 Hz from the dropdown, click **Apply** |
+| **Device** | Shows model, firmware, and battery % (auto-refreshes) at the top of the window; the **Device** tab holds Polling Rate and DPI Levels |
+| **Polling Rate** | Pick 125/250/500/1000 Hz, click **Apply** |
 | **DPI Levels** | Set each slot's value via the slider or the number box, choose the **active** slot with the radio buttons, and how many slots are in rotation with the count spinner, then click **Apply DPI Settings** |
+| **Buttons** | Remap all 6 buttons — see [Remapping buttons](#remapping-buttons) below |
 | **Refresh** | Re-reads everything currently stored on the mouse |
 | **Dark Mode** | Toggles the app's color scheme |
 | **Fullscreen (F11)** | Toggles fullscreen; `Esc` exits it |
@@ -163,6 +165,47 @@ it's confirmed written.
 - Only the slots up to **count** are actually cycled through by the
   mouse's onboard DPI button; the rest are just stored values.
 - DPI values are snapped to increments of 50.
+
+## Remapping buttons
+
+Switch to the **Buttons** tab. Each of the 6 rows corresponds to one
+physical button (Left, Right, Middle, Back, Forward, DPI). For each
+row:
+
+1. **Pick a type** from the dropdown: Disabled, Mouse Button, DPI
+   Cycle, Fire Key, Media Key, or Keyboard Shortcut.
+2. **Pick a value** — what this looks like depends on the type:
+   - **Mouse Button** — a dropdown of Left/Right/Middle/Back/Forward
+   - **DPI Cycle** — a dropdown of Loop+/Step Up/Step Down
+   - **Fire Key** — a dropdown of Double Click/Rapid Fire
+   - **Media Key** — a dropdown of volume, playback, browser
+     navigation, and other media keys
+   - **Keyboard Shortcut** — click **Set…**, then press the actual key
+     combo you want (e.g. hold Ctrl+Shift and tap C). The button
+     shows *Press keys… (Esc cancels)* while it's listening; pressing
+     Escape cancels without changing anything. You don't type
+     modifier names or look up key codes — just press the real combo.
+3. Repeat for any other buttons you want to change.
+4. Click **Apply Bindings** to write all 6 slots to the mouse at once
+   (the protocol has no single-button write — see the DPI note above
+   for why this is the same pattern as DPI).
+5. **Reset to Factory Defaults** restores the original 6 bindings
+   (Left/Right/Middle/Back/Forward + DPI Loop+) at any time.
+
+**If a slot shows as locked/read-only:** that button is currently
+bound to something this app doesn't support editing yet (a macro, or
+an otherwise-unrecognized type) — most likely set via the official web
+driver. The row displays its raw values but won't let you change it,
+and **Apply Bindings** writes that slot back completely unchanged, so
+editing other buttons can never accidentally corrupt it. Use the
+official web driver to change that specific slot if needed.
+
+**Setting a Keyboard Shortcut and forgetting to press a key:** clicking
+**Apply Bindings** with a Keyboard Shortcut slot that has no key
+captured yet (still shows "not set") pops up a warning naming the
+slot, rather than silently sending an incomplete binding — press
+**Set…** and press the combo, or change that slot's type, then apply
+again.
 
 ## Troubleshooting
 
@@ -276,12 +319,28 @@ revisions may use different encoding breakpoints.
   (`setMouseMacro`) built by a packer function that hasn't been fully
   reverse-engineered yet, and getting it wrong risks corrupting the
   mouse's macro storage — so this is deliberately left out until it can
-  be done safely.
-- **Button remapping is CLI-only for now.** The GUI doesn't yet have a
-  Buttons tab; use `h2_battery.py` for all button-binding changes in
-  the meantime.
+  be done safely. A slot already bound to a macro (e.g. via the
+  official web driver) shows as locked/read-only in the GUI rather than
+  letting you edit or accidentally clear it.
 
 ## Version History
+
+**v1.3.0**
+- **Full button remapping is now in the GUI**, not just the CLI — a new
+  **Buttons** tab lets you rebind all 6 buttons to a standard mouse
+  click, a DPI-cycle action, a fire-key action, a media key, or a
+  keyboard shortcut you capture by pressing it directly (see
+  [Remapping buttons](#remapping-buttons))
+- A slot bound to something the GUI doesn't support editing (a macro,
+  or an unrecognized type) shows as locked/read-only instead of being
+  silently overwritten when you apply other changes
+- UI layout refresh: model name, battery, and firmware now sit in a
+  compact header above the tabs instead of a boxed-off "Device"
+  section; Polling Rate is now a row of Hz buttons instead of a
+  dropdown; each DPI slot shows its live value next to its name,
+  with the slider on its own line below
+- No protocol or CLI changes in this release — `h2_battery.py` and
+  `h2_protocol.py` are unchanged from v1.2.1
 
 **v1.2.1**
 - **Fixed a critical data-validation bug**: the battery/device-info
