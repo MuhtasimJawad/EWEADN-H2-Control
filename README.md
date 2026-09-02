@@ -43,11 +43,9 @@ Two things this app does that the official web driver doesn't:
 >
 > Macro bindings are not supported — see [Known Limitations](#known-limitations).
 
-
 ## Screenshots
 
-![EWEADN H2 Control main window — dark mode, showing device info, polling rate, and DPI level sliders](screenshots/main-window.png) ![EWEADN H2 Control button remap window](screenshots/button-remap-window.png)
-
+![EWEADN H2 Control main window — dark mode, showing device info, polling rate, and DPI level sliders](screenshots/main-window.png)
 
 ## Requirements
 
@@ -411,6 +409,14 @@ carries a small inherent risk (as with any third-party hardware
 utility) — if a DPI/rate write ever leaves the mouse in a bad state,
 the official web driver is the reliable way to restore it, and is
 worth keeping handy.
+
+## AI Disclosure
+
+> **AI-assisted development:** EWEADN H2 Control is created and
+> maintained by a professional software developer who uses AI tools
+> throughout development. Every change is reviewed and verified
+> against real hardware by the maintainer, who remains responsible for
+> every technical decision and release.
 
 ## License
 
